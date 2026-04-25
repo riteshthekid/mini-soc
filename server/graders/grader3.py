@@ -252,7 +252,22 @@ def compute_step_reward(action_type: str, parameters: Dict[str, Any], state: Dic
         if ip in gt["ips_to_block"]:
             reward += 0.20
         else:
-            reward -= 0.05  # blocking wrong IP
+            # Partial credit for blocking IP in same subnet as attacker
+            partial = False
+            for target_ip in gt["ips_to_block"]:
+                ip_parts = ip.split(".")
+                target_parts = target_ip.split(".")
+                if len(ip_parts) == 4 and len(target_parts) == 4:
+                    if ip_parts[:3] == target_parts[:3]:
+                        reward += 0.10  # Same /24 subnet
+                        partial = True
+                        break
+                    elif ip_parts[:2] == target_parts[:2]:
+                        reward += 0.05  # Same /16 subnet
+                        partial = True
+                        break
+            if not partial:
+                reward -= 0.05  # blocking wrong IP
 
     elif action_type == "write_report":
         report = parameters.get("report", {})

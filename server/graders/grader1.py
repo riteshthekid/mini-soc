@@ -7,6 +7,23 @@ from __future__ import annotations
 from typing import Dict, Any, List
 
 
+# Classification aliases — LLMs often use synonyms
+_CLASSIFICATION_ALIASES = {
+    "critical":   {"critical", "crit", "high", "severe", "malicious", "true_positive"},
+    "suspicious": {"suspicious", "susp", "medium", "possible", "uncertain", "maybe"},
+    "benign":     {"benign", "safe", "clean", "false_positive", "low", "normal", "fp"},
+}
+
+
+def _normalize_classification(raw: str) -> str:
+    """Map an LLM classification output to the canonical form."""
+    c = raw.strip().lower().replace(" ", "_")
+    for canonical, aliases in _CLASSIFICATION_ALIASES.items():
+        if c in aliases:
+            return canonical
+    return c  # return as-is if not matched
+
+
 # Ground truth for each alert in Task 1
 GROUND_TRUTH: Dict[str, Dict[str, str]] = {
     "ALT-001": {"classification": "critical",   "priority": "P1"},
@@ -51,8 +68,9 @@ def grade(state: Dict[str, Any]) -> float:
 
         total_attempted += 1
 
-        # Classification score (exact match required)
-        if agent.get("classification", "").lower() == truth["classification"]:
+        # Classification score (fuzzy match via aliases)
+        agent_class = _normalize_classification(agent.get("classification", ""))
+        if agent_class == truth["classification"]:
             classification_correct += 1
 
         # Priority score (within 1 level = partial credit)
@@ -100,13 +118,14 @@ def compute_step_reward(
         return -0.05  # classifying unknown alert
 
     reward = 0.0
-    if classification.lower() == truth["classification"]:
+    norm_class = _normalize_classification(classification)
+    if norm_class == truth["classification"]:
         reward += 0.2
     else:
         # Penalize severity mismatch proportional to danger
-        if truth["classification"] == "critical" and classification == "benign":
+        if truth["classification"] == "critical" and norm_class == "benign":
             reward -= 0.3  # worst: missing a critical as benign
-        elif truth["classification"] == "benign" and classification == "critical":
+        elif truth["classification"] == "benign" and norm_class == "critical":
             reward -= 0.1  # false alarm: wasted resources
         else:
             reward -= 0.05  # minor miss

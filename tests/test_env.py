@@ -632,3 +632,83 @@ def test_grader2_insider_threat_internal_label():
     }
     score = grader2.grade(state)
     assert score > 0.8, f"Insider 'internal_user' should get full attacker_id credit, got {score}"
+
+
+# ============================================================================
+# Track B: Algorithm improvement tests
+# ============================================================================
+
+
+def test_grader1_classification_alias_high():
+    """Grader1 accepts 'high' as alias for 'critical'."""
+    state = {
+        "agent_classifications": {
+            "ALT-001": {"classification": "high", "priority": "P1"},
+            "ALT-002": {"classification": "high", "priority": "P1"},
+        }
+    }
+    score = grader1.grade(state)
+    assert score > 0.0, f"'high' should be accepted as alias for 'critical', got {score}"
+
+
+def test_grader1_classification_alias_safe():
+    """Grader1 accepts 'safe' as alias for 'benign'."""
+    state = {
+        "agent_classifications": {
+            "ALT-020": {"classification": "safe", "priority": "P4"},
+            "ALT-030": {"classification": "clean", "priority": "P4"},
+        }
+    }
+    score = grader1.grade(state)
+    assert score > 0.0, f"'safe'/'clean' should be accepted as aliases for 'benign', got {score}"
+
+
+def test_grader1_step_reward_alias():
+    """Grader1 step reward accepts 'high' as 'critical'."""
+    reward = grader1.compute_step_reward("ALT-001", "high", "P1")
+    assert reward > 0.0, f"'high' should get positive step reward for critical alert, got {reward}"
+
+
+def test_grader2_attack_type_alias_ssh_brute_force():
+    """Grader2 accepts 'ssh_brute_force' as alias for 'brute_force_ssh'."""
+    state = {
+        "scenario_id": "brute_force_ssh_001",
+        "agent_verdict": "true_positive",
+        "agent_attack_type": "ssh_brute_force",
+        "agent_attacker_ip": "185.220.101.47",
+        "agent_queried_log_ids": ["AUTH-001", "AUTH-002", "FW-001"],
+        "agent_queried_sources": ["auth", "firewall"],
+    }
+    score = grader2.grade(state)
+    assert score > 0.85, f"'ssh_brute_force' alias should get near-perfect score, got {score}"
+
+
+def test_grader2_attack_type_alias_password_guessing():
+    """Grader2 accepts 'password_guessing' as alias for 'brute_force_ssh'."""
+    state = {
+        "scenario_id": "brute_force_ssh_001",
+        "agent_verdict": "tp",
+        "agent_attack_type": "password_guessing",
+        "agent_attacker_ip": "185.220.101.47",
+        "agent_queried_log_ids": ["AUTH-001", "AUTH-002"],
+        "agent_queried_sources": ["auth", "firewall"],
+    }
+    score = grader2.grade(state)
+    assert score > 0.80, f"'password_guessing' alias should get good score, got {score}"
+
+
+def test_grader3_block_ip_subnet_partial_credit():
+    """Grader3 gives partial credit for blocking IP in same /24 subnet."""
+    state = {
+        "scenario_id": "phishing_lateral_001",
+        "agent_isolated_assets": ["WS-HR-03"],
+        "agent_blocked_ips": ["94.102.49.191"],  # .191 instead of .190
+        "agent_queried_sources": ["process", "network"],
+        "agent_report": {},
+        "steps_taken": 5,
+        "max_steps": 30,
+    }
+    reward = grader3.compute_step_reward(
+        "block_ip", {"ip_address": "94.102.49.191"}, state
+    )
+    assert reward > 0.0, f"Blocking IP in same /24 subnet should get positive reward, got {reward}"

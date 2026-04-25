@@ -111,22 +111,75 @@ def _score_verdict(state: Dict[str, Any], gt: Dict[str, Any]) -> float:
     return 0.0
 
 
+# Attack type canonical aliases — maps common LLM phrasings to ground truth
+_ATTACK_TYPE_ALIASES = {
+    "brute_force_ssh": {
+        "brute_force_ssh", "ssh_brute_force", "brute_force", "credential_brute_force",
+        "password_guessing", "credential_stuffing", "ssh_attack", "brute_force_attack",
+    },
+    "phishing_lateral_movement": {
+        "phishing_lateral_movement", "phishing_lateral", "spearphishing",
+        "phishing_attack", "lateral_movement", "phishing_with_lateral",
+        "spearphishing_lateral", "phishing",
+    },
+    "ransomware": {
+        "ransomware", "ransomware_attack", "crypto_ransomware", "encryption_attack",
+        "file_encryption", "ransom",
+    },
+    "insider_threat": {
+        "insider_threat", "insider", "internal_threat", "data_exfiltration",
+        "insider_data_theft", "malicious_insider",
+    },
+    "supply_chain_attack": {
+        "supply_chain_attack", "supply_chain", "dependency_attack",
+        "third_party_compromise", "vendor_compromise",
+    },
+    "advanced_persistent_threat": {
+        "advanced_persistent_threat", "apt", "multi_stage_apt",
+        "multi_stage_attack", "persistent_threat", "apt_attack",
+    },
+}
+
+
+def _normalize_attack_type(raw: str) -> str:
+    """Map an LLM attack type output to the canonical form."""
+    a = raw.strip().lower().replace(" ", "_").replace("-", "_")
+    for canonical, aliases in _ATTACK_TYPE_ALIASES.items():
+        if a in aliases:
+            return canonical
+    return a
+
+
 def _score_attack_type(state: Dict[str, Any], gt: Dict[str, Any]) -> float:
     agent = state.get("agent_attack_type", "").lower().replace(" ", "_")
     truth = gt["attack_type"]
-    
+
+    # Exact match
     if agent == truth:
         return 1.0
+
+    # Try canonical alias normalization
+    norm_agent = _normalize_attack_type(agent)
+    norm_truth = _normalize_attack_type(truth)
+    if norm_agent == norm_truth:
+        return 1.0
+
+    # Substring containment
     if agent and (truth in agent or agent in truth):
         return 0.7  # Close match (e.g., brute_force vs brute_force_ssh)
-    
+
+    # Check if normalized forms share aliases
+    for canonical, aliases in _ATTACK_TYPE_ALIASES.items():
+        if norm_agent in aliases and norm_truth in aliases:
+            return 0.9  # Same family
+
     # Keyword overlap check
     agent_words = set(agent.split("_"))
     truth_words = set(truth.split("_"))
     overlap = agent_words & truth_words
     if overlap and len(overlap) >= len(truth_words) * 0.5:
         return 0.4  # Partial keyword match
-    
+
     return 0.0
 
 
@@ -219,9 +272,11 @@ def compute_step_reward(action_type: str, parameters: Dict[str, Any], state: Dic
         if verdict == gt["verdict"] or verdict in _VERDICT_ALIASES.get(gt["verdict"], set()):
             reward += 0.3
             
-        # Step reward for attack_type (fuzzy match)
+        # Step reward for attack_type (fuzzy match via aliases)
         truth_type = gt["attack_type"]
-        if attack_type == truth_type:
+        norm_agent_type = _normalize_attack_type(attack_type)
+        norm_truth_type = _normalize_attack_type(truth_type)
+        if attack_type == truth_type or norm_agent_type == norm_truth_type:
             reward += 0.2
         elif attack_type and (truth_type in attack_type or attack_type in truth_type):
             reward += 0.15
