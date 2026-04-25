@@ -42,7 +42,7 @@ def run_training(
     gradient_accumulation_steps: int = 4,
     learning_rate: float = 2e-5,
     num_generations: int = 4,
-    max_new_tokens: int = 200,
+    max_completion_length: int = 200,
     temperature: float = 0.7,
     num_prompts: int = 60,
     save_steps: int = 50,
@@ -61,7 +61,7 @@ def run_training(
         gradient_accumulation_steps: Gradient accumulation steps.
         learning_rate: Learning rate for AdamW optimizer.
         num_generations: K — group size for GRPO.
-        max_new_tokens: Max tokens in model completions.
+        max_completion_length: Max tokens in model completions.
         temperature: Sampling temperature.
         num_prompts: Number of training prompts to generate.
         save_steps: Save checkpoint every N steps.
@@ -197,7 +197,7 @@ def run_training(
         gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
         num_generations=num_generations,
-        max_new_tokens=max_new_tokens,
+        max_completion_length=max_completion_length,
         temperature=temperature,
         logging_steps=logging_steps,
         save_steps=save_steps,
