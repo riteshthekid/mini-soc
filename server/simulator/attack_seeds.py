@@ -136,6 +136,7 @@ ATTACK_SCENARIOS: Dict[str, Dict[str, Any]] = {
                 "network_c2_beacon",
             ],
             "affected_assets": ["WS-HR-03", "DC-01"],
+            "assets_to_isolate": ["WS-HR-03"],  # DC-01 is lateral target but critical — do NOT isolate
             "attacker_ips": ["94.102.49.190", "10.0.2.15"],
             "mitre_techniques": [
                 {"technique_id": "T1566.001", "name": "Spearphishing Attachment", "tactic": "Initial Access"},

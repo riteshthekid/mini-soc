@@ -159,6 +159,7 @@ def test_grader1_partial_score():
 
 def test_grader2_perfect_score():
     state = {
+        "scenario_id": "brute_force_ssh_001",
         "agent_verdict": "true_positive",
         "agent_attack_type": "brute_force",
         "agent_attacker_ip": "185.220.101.47",
@@ -171,6 +172,7 @@ def test_grader2_perfect_score():
 
 def test_grader2_wrong_verdict():
     state = {
+        "scenario_id": "brute_force_ssh_001",
         "agent_verdict": "false_positive",
         "agent_attack_type": "brute_force",
         "agent_attacker_ip": "185.220.101.47",
@@ -183,6 +185,7 @@ def test_grader2_wrong_verdict():
 
 def test_grader3_collateral_damage():
     state = {
+        "scenario_id": "phishing_lateral_001",
         "agent_isolated_assets": ["DC-01"],  # WRONG: healthy critical asset
         "agent_blocked_ips": ["94.102.49.190"],
         "agent_queried_sources": ["process", "network"],
@@ -196,6 +199,7 @@ def test_grader3_collateral_damage():
 
 def test_grader3_scores_in_range():
     state = {
+        "scenario_id": "phishing_lateral_001",
         "agent_isolated_assets": [],
         "agent_blocked_ips": [],
         "agent_queried_sources": [],
@@ -446,3 +450,185 @@ def test_state_endpoint(client):
     assert "ground_truth" in data
     assert "observation" in data
     assert data["ground_truth"]["verdict"] == "true_positive"
+
+
+# ---------------------------------------------------------------------------
+# Scenario selection tests (wires all 7 scenarios to gameplay)
+# ---------------------------------------------------------------------------
+
+def test_scenario_selection_tier1(env):
+    """Tier 1 uses default scenarios: brute_force + phishing_lateral."""
+    from server.mini_soc_environment import DifficultyTier
+    env._difficulty_tier = DifficultyTier.TIER_1
+
+    env.reset("incident_investigation")
+    assert env._active_scenario_id == "brute_force_ssh_001"
+
+    env.reset("threat_response")
+    assert env._active_scenario_id == "phishing_lateral_001"
+
+    env.reset("alert_triage")
+    assert env._active_scenario_id == ""  # Task 1 uses mixed queue
+
+
+def test_scenario_selection_tier2(env):
+    """Tier 2 unlocks ransomware + insider threat scenarios."""
+    from server.mini_soc_environment import DifficultyTier
+    env._difficulty_tier = DifficultyTier.TIER_2
+
+    env.reset("incident_investigation")
+    assert env._active_scenario_id in ("ransomware_001", "insider_threat_001")
+
+    env.reset("threat_response")
+    assert env._active_scenario_id == "ransomware_001"
+
+
+def test_scenario_selection_tier3(env):
+    """Tier 3 unlocks supply chain + APT scenarios."""
+    from server.mini_soc_environment import DifficultyTier
+    env._difficulty_tier = DifficultyTier.TIER_3
+
+    env.reset("incident_investigation")
+    assert env._active_scenario_id == "supply_chain_001"
+
+    env.reset("threat_response")
+    assert env._active_scenario_id == "multi_stage_apt_001"
+
+
+def test_grader2_ransomware_scenario():
+    """Grader2 correctly grades ransomware_001 scenario."""
+    state = {
+        "scenario_id": "ransomware_001",
+        "agent_verdict": "true_positive",
+        "agent_attack_type": "malware",
+        "agent_attacker_ip": "192.168.50.99",
+        "agent_queried_log_ids": ["PROC-R01", "PROC-R02", "NET-R01"],
+        "agent_queried_sources": ["process", "network", "firewall"],
+    }
+    score = grader2.grade(state)
+    assert score > 0.8, f"Ransomware perfect answer should score >0.8, got {score}"
+
+
+def test_grader3_ransomware_scenario():
+    """Grader3 correctly grades ransomware_001 — isolate WS-FINANCE-01."""
+    state = {
+        "scenario_id": "ransomware_001",
+        "agent_isolated_assets": ["WS-FINANCE-01"],
+        "agent_blocked_ips": ["192.168.50.99"],
+        "agent_queried_sources": ["process", "network", "firewall"],
+        "agent_report": {
+            "summary": "Ransomware detected",
+            "attack_type": "malware",
+            "affected_assets": ["WS-FINANCE-01"],
+            "attacker_ip": "192.168.50.99",
+            "timeline": "Shadow copy deletion then encryption",
+        },
+        "steps_taken": 8,
+        "max_steps": 30,
+    }
+    score = grader3.grade(state)
+    assert score > 0.7, f"Ransomware correct response should score >0.7, got {score}"
+
+
+def test_grader3_apt_scenario_dc01_is_compromised():
+    """In APT scenario, DC-01 IS compromised — isolating it is correct."""
+    state = {
+        "scenario_id": "multi_stage_apt_001",
+        "agent_isolated_assets": ["DC-01", "BACKUP-SRV-01"],
+        "agent_blocked_ips": ["45.33.32.156"],
+        "agent_queried_sources": ["auth", "process", "network", "dns"],
+        "agent_report": {
+            "summary": "APT detected",
+            "attack_type": "lateral_movement",
+            "affected_assets": ["BACKUP-SRV-01", "DC-01"],
+            "attacker_ip": "45.33.32.156",
+            "timeline": "Service account compromise then lateral movement",
+        },
+        "steps_taken": 10,
+        "max_steps": 30,
+    }
+    score = grader3.grade(state)
+    # DC-01 is actually compromised in APT scenario, so no collateral penalty
+    assert score > 0.65, f"APT correct response should score >0.65, got {score}"
+
+
+def test_tier2_episode_full_cycle(env):
+    """Full episode at Tier 2 uses ransomware scenario for threat_response."""
+    from server.mini_soc_environment import DifficultyTier
+    from models import Action, ActionType
+    env._difficulty_tier = DifficultyTier.TIER_2
+    result = env.reset("threat_response")
+    assert env._active_scenario_id == "ransomware_001"
+    # First alert should be from ransomware scenario
+    assert result.observation.alert_queue[0].alert_id == "ALT-040"
+
+
+def test_grader3_insider_threat_no_ip_full_credit():
+    """Insider threat: agent omits attacker_ip → full report credit."""
+    state = {
+        "scenario_id": "insider_threat_001",
+        "agent_isolated_assets": ["WS-FINANCE-01"],
+        "agent_blocked_ips": [],
+        "agent_queried_sources": ["network", "auth", "dns"],
+        "agent_report": {
+            "summary": "Insider data exfiltration detected",
+            "attack_type": "data_exfiltration",
+            "affected_assets": ["WS-FINANCE-01"],
+            "attacker_ip": "",  # correctly empty — no external attacker
+            "timeline": "User staged data then exfiltrated via cloud",
+        },
+        "steps_taken": 8,
+        "max_steps": 30,
+    }
+    score = grader3.grade(state)
+    # Agent should NOT be penalized for empty attacker_ip on insider threat
+    assert score > 0.6, f"Insider threat with correct response should score >0.6, got {score}"
+
+
+def test_grader3_insider_threat_internal_label():
+    """Insider threat: agent reports 'internal_user' → full credit."""
+    state = {
+        "scenario_id": "insider_threat_001",
+        "agent_isolated_assets": ["WS-FINANCE-01"],
+        "agent_blocked_ips": [],
+        "agent_queried_sources": ["network", "auth", "dns"],
+        "agent_report": {
+            "summary": "Insider data exfiltration detected",
+            "attack_type": "data_exfiltration",
+            "affected_assets": ["WS-FINANCE-01"],
+            "attacker_ip": "internal_user",  # acceptable label for insider
+            "timeline": "User staged data then exfiltrated via cloud",
+        },
+        "steps_taken": 8,
+        "max_steps": 30,
+    }
+    score = grader3.grade(state)
+    assert score > 0.6, f"Insider 'internal_user' label should get full credit, got {score}"
+
+
+def test_grader2_insider_threat_no_ip():
+    """Grader2 awards full attacker_id score for insider threat with no IP."""
+    state = {
+        "scenario_id": "insider_threat_001",
+        "agent_verdict": "true_positive",
+        "agent_attack_type": "data_exfiltration",
+        "agent_attacker_ip": "",
+        "agent_queried_log_ids": ["NET-I01", "AUTH-I01", "DNS-I01"],
+        "agent_queried_sources": ["network", "auth", "dns"],
+    }
+    score = grader2.grade(state)
+    assert score > 0.8, f"Insider threat correct verdict should score >0.8, got {score}"
+
+
+def test_grader2_insider_threat_internal_label():
+    """Grader2 accepts 'internal' as correct for insider scenarios."""
+    state = {
+        "scenario_id": "insider_threat_001",
+        "agent_verdict": "true_positive",
+        "agent_attack_type": "data_exfiltration",
+        "agent_attacker_ip": "internal_user",
+        "agent_queried_log_ids": ["NET-I01", "AUTH-I01", "DNS-I01"],
+        "agent_queried_sources": ["network", "auth", "dns"],
+    }
+    score = grader2.grade(state)
+    assert score > 0.8, f"Insider 'internal_user' should get full attacker_id credit, got {score}"

@@ -33,7 +33,7 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B-Instruct")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./outputs/mini-soc-grpo")
 HF_REPO = os.environ.get("HF_REPO", "riteshthekid/mini-soc-grpo")
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "mini-soc-rl")
-SOC_ENV_URL = os.environ.get("SOC_ENV_URL", "http://localhost:8000")
+SOC_ENV_URL = os.environ.get("SOC_ENV_URL", "https://riteshp30-mini-soc.hf.space")
 
 
 def run_training(
@@ -93,6 +93,9 @@ def run_training(
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    # Ensure reward_wrapper uses the correct environment URL
+    import train.reward_wrapper as rw
+    rw.SOC_ENV_URL = os.environ.get("SOC_ENV_URL", SOC_ENV_URL)
     from train.reward_wrapper import soc_reward_function, build_soc_dataset
 
     # -----------------------------------------------------------------------
@@ -284,13 +287,23 @@ if __name__ == "__main__":
     parser.add_argument("--K", type=int, default=4, help="GRPO group size")
     parser.add_argument("--prompts", type=int, default=60, help="Training prompts")
     parser.add_argument("--push", action="store_true", help="Push to HF Hub")
+    parser.add_argument("--push-to-hub", type=str, default=None, help="HF Hub repo to push model to")
     parser.add_argument("--no-wandb", action="store_true", help="Disable WandB")
     parser.add_argument("--unsloth", action="store_true", help="Use Unsloth")
     parser.add_argument("--model", type=str, default=None, help="Model name override")
+    parser.add_argument("--env-url", type=str, default=None, help="SOC environment URL")
+    parser.add_argument("--output-dir", type=str, default=None, help="Output directory for model")
     args = parser.parse_args()
 
     if args.model:
         MODEL_NAME = args.model
+    if args.env_url:
+        os.environ["SOC_ENV_URL"] = args.env_url
+        SOC_ENV_URL = args.env_url
+    if args.output_dir:
+        OUTPUT_DIR = args.output_dir
+    if args.push_to_hub:
+        HF_REPO = args.push_to_hub
 
     output = run_training(
         num_steps=args.steps,
@@ -298,7 +311,7 @@ if __name__ == "__main__":
         learning_rate=args.lr,
         num_generations=args.K,
         num_prompts=args.prompts,
-        push_to_hub=args.push,
+        push_to_hub=args.push or bool(args.push_to_hub),
         use_wandb=not args.no_wandb,
         use_unsloth=args.unsloth,
     )

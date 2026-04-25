@@ -33,7 +33,7 @@ SOC_ENV_URL = os.getenv("SOC_ENV_URL", "http://localhost:8000")
 
 TASKS = ["alert_triage", "incident_investigation", "threat_response"]
 MAX_STEPS = {"alert_triage": 15, "incident_investigation": 20, "threat_response": 30}
-SUCCESS_THRESHOLD = {"alert_triage": 0.6, "incident_investigation": 0.4, "threat_response": 0.3}
+SUCCESS_THRESHOLD = {"alert_triage": 0.6, "incident_investigation": 0.5, "threat_response": 0.4}
 
 
 # ---------------------------------------------------------------------------

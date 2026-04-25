@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import time
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -25,11 +26,20 @@ logger = logging.getLogger("mini_soc.train")
 # Configuration
 # ---------------------------------------------------------------------------
 
-SOC_ENV_URL = os.environ.get("SOC_ENV_URL", "http://localhost:8000")
-REQUEST_TIMEOUT = float(os.environ.get("SOC_TIMEOUT", "15"))
+SOC_ENV_URL = os.environ.get(
+    "SOC_ENV_URL",
+    "https://riteshp30-mini-soc.hf.space",  # Default to live HF Space for Colab
+)
+REQUEST_TIMEOUT = float(os.environ.get("SOC_TIMEOUT", "30"))
 
 # Task IDs available in the environment
 TASK_IDS = ["alert_triage", "incident_investigation", "threat_response"]
+
+# Reward normalization — raw step rewards range [-0.40, +0.30].
+# Scaling improves GRPO convergence.
+REWARD_SCALE = 2.5
+REWARD_CLIP_MIN = -1.0
+REWARD_CLIP_MAX = 1.0
 
 # System prompt template given to the model
 SYSTEM_PROMPT = (
@@ -38,8 +48,59 @@ SYSTEM_PROMPT = (
     "'parameters' keys.\n\n"
     "Available action_types: query_logs, classify_alert, isolate_asset, "
     "block_ip, escalate, write_report, close_incident, request_info.\n\n"
-    "Respond with ONLY valid JSON. No explanations."
+    "Respond with ONLY valid JSON. No explanations, no markdown, no backticks.\n"
+    "Example: {\"action_type\": \"classify_alert\", \"parameters\": "
+    "{\"alert_id\": \"ALT-001\", \"classification\": \"critical\", \"priority\": \"P1\"}}"
 )
+
+
+# ---------------------------------------------------------------------------
+# Reward normalization
+# ---------------------------------------------------------------------------
+
+def normalize_reward(raw: float) -> float:
+    """Scale and clip raw step reward for GRPO stability."""
+    scaled = raw * REWARD_SCALE
+    return max(REWARD_CLIP_MIN, min(REWARD_CLIP_MAX, scaled))
+
+
+# ---------------------------------------------------------------------------
+# HTTP helpers with retry logic
+# ---------------------------------------------------------------------------
+
+def _request_with_retry(
+    method: str,
+    url: str,
+    payload: Optional[Dict] = None,
+    retries: int = 3,
+    delay: float = 2.0,
+) -> Dict[str, Any]:
+    """Make an HTTP request with exponential backoff retry."""
+    for attempt in range(retries):
+        try:
+            if method == "GET":
+                r = httpx.get(url, timeout=REQUEST_TIMEOUT)
+            else:
+                r = httpx.post(url, json=payload or {}, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            if attempt == retries - 1:
+                logger.warning("Request failed after %d retries: %s %s → %s", retries, method, url, e)
+                raise
+            wait = delay * (attempt + 1)
+            logger.debug("Request attempt %d failed, retrying in %.1fs: %s", attempt + 1, wait, e)
+            time.sleep(wait)
+    return {}  # unreachable, but satisfies type checker
+
+
+def _check_env_health() -> bool:
+    """Verify the environment server is reachable."""
+    try:
+        health = _request_with_retry("GET", f"{SOC_ENV_URL}/health", retries=2)
+        return health.get("status") == "ok"
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -57,9 +118,10 @@ def soc_reward_function(
       1. Parse it as JSON to extract action_type + parameters
       2. Reset the environment for the assigned task
       3. Execute a multi-step episode (up to 10 steps per completion)
-      4. Return the cumulative episode reward
+      4. Return the cumulative episode reward (normalized)
 
     If the completion is malformed JSON, return -0.1 penalty.
+    If the environment is unreachable, return -0.1 for all completions.
 
     Args:
         completions: List of model-generated completion strings.
@@ -68,6 +130,11 @@ def soc_reward_function(
     Returns:
         List of float rewards, one per completion.
     """
+    # Health check — fail fast if env is down
+    if not _check_env_health():
+        logger.warning("Environment unreachable at %s — returning fallback rewards", SOC_ENV_URL)
+        return [-0.1] * len(completions)
+
     rewards = []
     prompts = kwargs.get("prompts", [])
 
@@ -94,59 +161,45 @@ def _run_single_episode(
       1. Single action: {"action_type": "...", "parameters": {...}}
       2. Multi-step plan: [{"action_type": "...", ...}, ...]
 
-    Returns the total episode reward.
+    Returns the total episode reward (normalized).
     """
-    client = httpx.Client(timeout=REQUEST_TIMEOUT)
+    # Determine which task to run based on prompt content
+    task_id = _extract_task_id(prompts, idx)
 
-    try:
-        # Determine which task to run based on prompt content
-        task_id = _extract_task_id(prompts, idx)
+    # Reset the environment
+    _request_with_retry("POST", f"{SOC_ENV_URL}/reset", {"task_id": task_id})
 
-        # Reset the environment
-        reset_resp = client.post(
-            f"{SOC_ENV_URL}/reset",
-            json={"task_id": task_id},
-        )
-        reset_resp.raise_for_status()
+    # Parse completion into action(s)
+    actions = _parse_completion(completion)
+    if not actions:
+        return -0.1  # Empty or unparseable
 
-        # Parse completion into action(s)
-        actions = _parse_completion(completion)
-        if not actions:
-            return -0.1  # Empty or unparseable
+    # Execute actions sequentially
+    total_reward = 0.0
+    for action in actions:
+        action_type = action.get("action_type", "")
+        parameters = action.get("parameters", {})
 
-        # Execute actions sequentially
-        total_reward = 0.0
-        for action in actions:
-            action_type = action.get("action_type", "")
-            parameters = action.get("parameters", {})
-
-            step_resp = client.post(
+        try:
+            result = _request_with_retry(
+                "POST",
                 f"{SOC_ENV_URL}/step",
-                json={
-                    "action_type": action_type,
-                    "parameters": parameters,
-                },
+                {"action_type": action_type, "parameters": parameters},
             )
-            step_resp.raise_for_status()
-            result = step_resp.json()
+        except Exception:
+            # Connection failed mid-episode — return what we have
+            return total_reward if total_reward != 0.0 else -0.1
 
-            total_reward += float(result.get("reward", 0.0))
+        step_reward = float(result.get("reward", 0.0))
+        total_reward += normalize_reward(step_reward)
 
-            if result.get("done", False):
-                # Add final score bonus (weighted)
-                final_score = result.get("info", {}).get("final_score", 0.0)
-                total_reward += final_score * 0.5
-                break
+        if result.get("done", False):
+            # Add final score bonus (weighted)
+            final_score = result.get("info", {}).get("final_score", 0.0)
+            total_reward += final_score * 0.5
+            break
 
-        return round(total_reward, 4)
-
-    except httpx.HTTPError as e:
-        logger.warning("HTTP error during episode: %s", e)
-        return -0.1
-    except json.JSONDecodeError:
-        return -0.1
-    finally:
-        client.close()
+    return round(total_reward, 4)
 
 
 def _parse_completion(completion: str) -> List[Dict[str, Any]]:
@@ -190,6 +243,21 @@ def _parse_completion(completion: str) -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             continue
 
+    # Last resort: try to find JSON embedded in natural language
+    if not actions:
+        import re
+        # Pattern allows one level of nested braces (for "parameters": {...})
+        json_pattern = re.compile(r'\{(?:[^{}]|\{[^{}]*\})*"action_type"(?:[^{}]|\{[^{}]*\})*\}')
+        matches = json_pattern.findall(text)
+        for match in matches:
+            try:
+                obj = json.loads(match)
+                if isinstance(obj, dict) and "action_type" in obj:
+                    actions.append(obj)
+                    break  # Take the first valid match
+            except json.JSONDecodeError:
+                continue
+
     return actions
 
 
@@ -211,6 +279,27 @@ def _extract_task_id(prompts: List[str], idx: int) -> str:
 # Dataset builder — creates the prompt dataset for GRPOTrainer
 # ---------------------------------------------------------------------------
 
+# Warmup actions used to diversify starting observations
+_WARMUP_ACTIONS = {
+    "alert_triage": [
+        {"action_type": "request_info", "parameters": {}},
+    ],
+    "incident_investigation": [
+        {"action_type": "query_logs", "parameters": {"log_source": "auth"}},
+        {"action_type": "query_logs", "parameters": {"log_source": "firewall"}},
+        {"action_type": "query_logs", "parameters": {"log_source": "dns"}},
+        {"action_type": "query_logs", "parameters": {"log_source": "process"}},
+        {"action_type": "query_logs", "parameters": {"log_source": "network"}},
+    ],
+    "threat_response": [
+        {"action_type": "query_logs", "parameters": {"log_source": "process"}},
+        {"action_type": "query_logs", "parameters": {"log_source": "network"}},
+        {"action_type": "query_logs", "parameters": {"log_source": "auth"}},
+        {"action_type": "request_info", "parameters": {}},
+    ],
+}
+
+
 def build_soc_dataset(num_samples: int = 60):
     """
     Build a HuggingFace Dataset of SOC task prompts for GRPO training.
@@ -218,30 +307,51 @@ def build_soc_dataset(num_samples: int = 60):
     Each sample contains a 'prompt' field formatted as a chat message
     with the system prompt and a task-specific user message.
 
+    To prevent overfitting on identical observations, each prompt is
+    generated from a slightly different starting state by executing
+    0–3 warm-up actions before capturing the observation.
+
     Args:
         num_samples: Total number of prompt samples (divided across 3 tasks).
 
     Returns:
         HuggingFace Dataset with 'prompt' column.
     """
-    client = httpx.Client(timeout=REQUEST_TIMEOUT)
     prompts = []
-
     samples_per_task = max(num_samples // len(TASK_IDS), 1)
 
     for task_id in TASK_IDS:
-        for _ in range(samples_per_task):
+        for i in range(samples_per_task):
             try:
                 # Reset to get a fresh observation
-                reset_resp = client.post(
+                obs_data = _request_with_retry(
+                    "POST",
                     f"{SOC_ENV_URL}/reset",
-                    json={"task_id": task_id},
+                    {"task_id": task_id},
                 )
-                reset_resp.raise_for_status()
-                obs_data = reset_resp.json()
 
-                # Build the prompt from the observation
-                prompt = _format_prompt(task_id, obs_data)
+                # Take 0–3 warmup actions to diversify the observation state
+                n_warmup = i % 4  # cycle: 0, 1, 2, 3, 0, 1, ...
+                warmup_pool = _WARMUP_ACTIONS.get(task_id, [])
+                for w in range(n_warmup):
+                    if not warmup_pool:
+                        break
+                    warmup_action = warmup_pool[w % len(warmup_pool)]
+                    try:
+                        step_result = _request_with_retry(
+                            "POST",
+                            f"{SOC_ENV_URL}/step",
+                            warmup_action,
+                        )
+                        if step_result.get("done", False):
+                            break
+                        # Use the post-warmup observation
+                        obs_data = step_result
+                    except Exception:
+                        break
+
+                # Build the prompt from the (possibly advanced) observation
+                prompt = _format_prompt(task_id, obs_data, step=n_warmup)
                 prompts.append({"prompt": prompt})
 
             except Exception as e:
@@ -251,7 +361,6 @@ def build_soc_dataset(num_samples: int = 60):
                     "prompt": _static_prompt(task_id),
                 })
 
-    client.close()
     random.shuffle(prompts)
 
     # Lazy import — only needed when actually building a dataset for training
@@ -259,7 +368,7 @@ def build_soc_dataset(num_samples: int = 60):
     return Dataset.from_list(prompts)
 
 
-def _format_prompt(task_id: str, obs_data: Dict[str, Any]) -> str:
+def _format_prompt(task_id: str, obs_data: Dict[str, Any], step: int = 0) -> str:
     """Format a training prompt from a reset observation."""
     obs = obs_data.get("observation", {})
     message = obs.get("message", "")
@@ -291,13 +400,35 @@ def _format_prompt(task_id: str, obs_data: Dict[str, Any]) -> str:
             )
         assets_summary = "\nAssets:\n" + "\n".join(asset_lines)
 
+    # Include available logs (if warmup produced some)
+    logs_summary = ""
+    logs = obs.get("available_logs", [])
+    if logs:
+        log_lines = []
+        for l in logs[:5]:
+            log_lines.append(
+                f"  - [{l.get('log_source', '?')}] {l.get('timestamp', '')[:16]} "
+                f"{l.get('event_type', '?')} src={l.get('source_ip', '?')}"
+            )
+        logs_summary = "\nRetrieved Logs:\n" + "\n".join(log_lines)
+
+    # Include open incidents
+    incidents_summary = ""
+    incidents = obs.get("open_incidents", [])
+    if incidents:
+        inc_lines = [f"  - {inc.get('incident_id', '?')}: {inc.get('status', '?')}" for inc in incidents]
+        incidents_summary = "\nOpen Incidents:\n" + "\n".join(inc_lines)
+
     prompt = (
         f"[SYSTEM]\n{SYSTEM_PROMPT}\n\n"
         f"[TASK]\nTask: {task_id} (difficulty: {difficulty})\n"
         f"Objective: {objective}\n"
+        f"Step: {step}\n"
         f"{message}"
         f"{alerts_summary}"
-        f"{assets_summary}\n\n"
+        f"{assets_summary}"
+        f"{logs_summary}"
+        f"{incidents_summary}\n\n"
         f"[RESPOND]\nIssue your next action as a JSON object:"
     )
     return prompt

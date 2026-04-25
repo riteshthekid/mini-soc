@@ -318,7 +318,7 @@ def main():
         print(f"[FATAL] Cannot reach environment: {e}", flush=True)
         return
 
-    SUCCESS_THRESHOLD = {"alert_triage": 0.6, "incident_investigation": 0.4, "threat_response": 0.3}
+    SUCCESS_THRESHOLD = {"alert_triage": 0.6, "incident_investigation": 0.5, "threat_response": 0.4}
 
     all_scores = {}
 

@@ -5,6 +5,7 @@ Implements the OpenEnv state machine: reset(), step(), state().
 from __future__ import annotations
 import uuid
 import copy
+import random
 from typing import Any, Dict, List, Optional, Tuple
 
 # Dual-import pattern: supports both package-mode and Docker-mode
@@ -94,6 +95,7 @@ class SocEnvironment:
     def __init__(self):
         self._episode_id: str = ""
         self._task_id: str = ""
+        self._active_scenario_id: str = ""
         self._step_count: int = 0
         self._done: bool = False
         self._total_reward: float = 0.0
@@ -128,6 +130,8 @@ class SocEnvironment:
         self._agent_attack_type: str = ""
         self._agent_attacker_ip: str = ""
         self._agent_report: Dict[str, Any] = {}
+        self._rewarded_log_ids: List[str] = []
+        self._rewarded_sources: List[str] = []
 
     # -----------------------------------------------------------------------
     # OpenEnv API
@@ -157,8 +161,9 @@ class SocEnvironment:
         self._agent_attacker_ip = ""
         self._agent_report = {}
 
-        # Build episode state
-        scenario_id = config["scenario_id"]
+        # Build episode state — select scenario based on difficulty tier
+        scenario_id = self._select_scenario(task_id)
+        self._active_scenario_id = scenario_id
         self._asset_inventory = build_asset_inventory(scenario_id)
         self._available_logs = []
         self._open_incidents = []
@@ -436,7 +441,11 @@ class SocEnvironment:
 
     def _surface_new_alerts(self):
         """Reveal additional alerts progressively in threat_response task."""
-        scenario = ATTACK_SCENARIOS["phishing_lateral_001"]
+        if not self._active_scenario_id:
+            return
+        scenario = ATTACK_SCENARIOS.get(self._active_scenario_id)
+        if not scenario:
+            return
         all_alerts = scenario["alerts"]
         reveal_at_steps = {3: 1, 6: 2}  # step_count → reveal up to index
         idx = reveal_at_steps.get(self._step_count)
@@ -505,6 +514,31 @@ class SocEnvironment:
             self._difficulty_tier = tier
             self._metrics["difficulty_tier"] = tier
 
+    def _select_scenario(self, task_id: str) -> str:
+        """
+        Select attack scenario based on task and current difficulty tier.
+        Tier 1 uses the original defaults. Higher tiers unlock additional
+        scenarios so all 7 scenario seeds see actual gameplay.
+        """
+        if task_id == "alert_triage":
+            return ""  # Task 1 uses mixed alert queue, not a single scenario
+
+        if task_id == "incident_investigation":
+            if self._difficulty_tier >= DifficultyTier.TIER_3:
+                return "supply_chain_001"
+            elif self._difficulty_tier >= DifficultyTier.TIER_2:
+                return random.choice(["ransomware_001", "insider_threat_001"])
+            return "brute_force_ssh_001"
+
+        if task_id == "threat_response":
+            if self._difficulty_tier >= DifficultyTier.TIER_3:
+                return "multi_stage_apt_001"
+            elif self._difficulty_tier >= DifficultyTier.TIER_2:
+                return "ransomware_001"
+            return "phishing_lateral_001"
+
+        return ""
+
     def get_metrics(self) -> Dict[str, Any]:
         """Return training metrics for the /metrics endpoint."""
         metrics = dict(self._metrics)
@@ -518,6 +552,7 @@ class SocEnvironment:
 
     def _build_grader_state(self) -> Dict[str, Any]:
         return {
+            "scenario_id": self._active_scenario_id,
             "agent_classifications": self._agent_classifications,
             "agent_queried_log_ids": self._agent_queried_log_ids,
             "agent_queried_sources": self._agent_queried_sources,
@@ -527,14 +562,16 @@ class SocEnvironment:
             "agent_attack_type": self._agent_attack_type,
             "agent_attacker_ip": self._agent_attacker_ip,
             "agent_report": self._agent_report,
+            "rewarded_log_ids": self._rewarded_log_ids,
+            "rewarded_sources": self._rewarded_sources,
             "steps_taken": self._step_count,
             "max_steps": TASK_CONFIG[self._task_id]["max_steps"],
         }
 
     def _build_ground_truth(self) -> Dict[str, Any]:
-        scenario_id = TASK_CONFIG[self._task_id].get("scenario_id")
+        scenario_id = self._active_scenario_id
         if scenario_id:
-            return ATTACK_SCENARIOS[scenario_id].get("ground_truth", {})
+            return ATTACK_SCENARIOS.get(scenario_id, {}).get("ground_truth", {})
         return {}
 
     def _build_observation(self, message: str = "") -> Observation:
