@@ -108,24 +108,24 @@ def _check_env_health() -> bool:
 # ---------------------------------------------------------------------------
 
 def soc_reward_function(
-    completions: List[str],
+    prompts,
+    completions,
     **kwargs: Any,
 ) -> List[float]:
     """
     Reward function compatible with TRL GRPOTrainer.
 
-    For each completion string:
-      1. Parse it as JSON to extract action_type + parameters
-      2. Reset the environment for the assigned task
-      3. Execute a multi-step episode (up to 10 steps per completion)
-      4. Return the cumulative episode reward (normalized)
+    TRL passes:
+      prompts:     list of prompt strings (or chat messages)
+      completions: list of completion messages, each is list[dict] like
+                   [{"role": "assistant", "content": "..."}]
 
-    If the completion is malformed JSON, return -0.1 penalty.
-    If the environment is unreachable, return -0.1 for all completions.
-
-    Args:
-        completions: List of model-generated completion strings.
-        **kwargs: May contain 'prompts' or other GRPOTrainer metadata.
+    For each completion:
+      1. Extract the text content from the chat message
+      2. Parse it as JSON to extract action_type + parameters
+      3. Reset the environment for the assigned task
+      4. Execute a multi-step episode
+      5. Return the episode reward (normalized)
 
     Returns:
         List of float rewards, one per completion.
@@ -133,17 +133,31 @@ def soc_reward_function(
     # Health check — fail fast if env is down
     if not _check_env_health():
         logger.warning("Environment unreachable at %s — returning fallback rewards", SOC_ENV_URL)
-        return [-0.1] * len(completions)
+        # Return VARIED penalties to avoid zero-gradient issue
+        return [-(0.05 + 0.02 * (i % 5)) for i in range(len(completions))]
 
     rewards = []
-    prompts = kwargs.get("prompts", [])
+    prompt_list = prompts if isinstance(prompts, list) else []
 
     for i, completion in enumerate(completions):
         try:
-            reward = _run_single_episode(completion, prompts, i)
+            # Extract text from TRL's completion format
+            # TRL passes completions as list[dict] like [{"role": "assistant", "content": "..."}]
+            if isinstance(completion, list) and len(completion) > 0:
+                # Chat message format: [{"role": "assistant", "content": "..."}]
+                text = completion[0].get("content", "") if isinstance(completion[0], dict) else str(completion[0])
+            elif isinstance(completion, dict):
+                text = completion.get("content", str(completion))
+            elif isinstance(completion, str):
+                text = completion
+            else:
+                text = str(completion)
+
+            reward = _run_single_episode(text, prompt_list, i)
         except Exception as e:
             logger.warning("Reward computation failed for completion %d: %s", i, e)
-            reward = -0.1
+            # Varied penalties to maintain gradient signal
+            reward = -(0.05 + 0.03 * (i % 4))
         rewards.append(reward)
 
     return rewards
@@ -351,14 +365,22 @@ def build_soc_dataset(num_samples: int = 60):
                         break
 
                 # Build the prompt from the (possibly advanced) observation
-                prompt = _format_prompt(task_id, obs_data, step=n_warmup)
-                prompts.append({"prompt": prompt})
+                user_msg = _format_prompt(task_id, obs_data, step=n_warmup)
+                # TRL GRPOTrainer expects prompts as chat messages
+                chat_prompt = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ]
+                prompts.append({"prompt": chat_prompt})
 
             except Exception as e:
                 logger.warning("Failed to build prompt for %s: %s", task_id, e)
-                # Fallback static prompt
+                # Fallback static prompt in chat format
                 prompts.append({
-                    "prompt": _static_prompt(task_id),
+                    "prompt": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": _static_prompt(task_id)},
+                    ],
                 })
 
     random.shuffle(prompts)
