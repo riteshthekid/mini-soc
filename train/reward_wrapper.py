@@ -171,49 +171,113 @@ def _run_single_episode(
     """
     Execute a single episode from one model completion.
 
-    Supports two formats:
-      1. Single action: {"action_type": "...", "parameters": {...}}
-      2. Multi-step plan: [{"action_type": "...", ...}, ...]
+    Uses MULTI-LEVEL reward to ensure gradient signal even for bad completions:
+      Level 0: Raw text quality (is it short? is it JSON-like?)
+      Level 1: Valid JSON parse (+0.1)
+      Level 2: Has action_type + parameters keys (+0.15)
+      Level 3: Uses a valid action_type name (+0.1)
+      Level 4: Environment execution reward (variable)
 
-    Returns the total episode reward (normalized).
+    This ensures different completions get different rewards even if all
+    are invalid JSON, which is critical for GRPO's relative advantage.
     """
-    # Determine which task to run based on prompt content
+    reward = 0.0
+
+    # Log first few completions for debugging
+    if idx < 2:
+        logger.info("Completion %d (first 200 chars): %s", idx, completion[:200])
+
+    # -----------------------------------------------------------------------
+    # Level 0: Text quality signals (no parsing needed)
+    # -----------------------------------------------------------------------
+    text = completion.strip()
+    if not text:
+        return -0.2  # Empty completion
+
+    # Reward for containing JSON-like characters
+    if "{" in text and "}" in text:
+        reward += 0.05
+    if "action_type" in text:
+        reward += 0.05
+    if "parameters" in text:
+        reward += 0.03
+
+    # Penalty for excessive length (model rambling)
+    if len(text) > 500:
+        reward -= 0.05
+
+    # -----------------------------------------------------------------------
+    # Level 1: JSON parsing
+    # -----------------------------------------------------------------------
+    actions = _parse_completion(text)
+    if not actions:
+        # Can't parse any JSON — return format-based reward only
+        # This is still differentiated based on text content above
+        return round(reward - 0.1, 4)
+
+    # Successfully parsed JSON
+    reward += 0.1
+
+    # -----------------------------------------------------------------------
+    # Level 2: Structure check (has required keys?)
+    # -----------------------------------------------------------------------
+    action = actions[0]  # Use first action
+    action_type = action.get("action_type", "")
+    parameters = action.get("parameters", {})
+
+    if action_type and isinstance(parameters, dict):
+        reward += 0.15  # Properly structured action
+    elif action_type:
+        reward += 0.05  # Has action_type but bad parameters
+
+    # -----------------------------------------------------------------------
+    # Level 3: Valid action type name
+    # -----------------------------------------------------------------------
+    VALID_ACTIONS = {
+        "query_logs", "classify_alert", "isolate_asset", "block_ip",
+        "escalate", "write_report", "close_incident", "request_info",
+    }
+    if action_type in VALID_ACTIONS:
+        reward += 0.1
+    elif action_type:
+        reward -= 0.02  # Has an action_type but it's not valid
+
+    # -----------------------------------------------------------------------
+    # Level 4: Environment execution (if we got this far)
+    # -----------------------------------------------------------------------
     task_id = _extract_task_id(prompts, idx)
 
-    # Reset the environment
-    _request_with_retry("POST", f"{SOC_ENV_URL}/reset", {"task_id": task_id})
+    try:
+        _request_with_retry("POST", f"{SOC_ENV_URL}/reset", {"task_id": task_id})
+    except Exception:
+        # Can't reach env — return format-based reward
+        return round(reward, 4)
 
-    # Parse completion into action(s)
-    actions = _parse_completion(completion)
-    if not actions:
-        return -0.1  # Empty or unparseable
-
-    # Execute actions sequentially
-    total_reward = 0.0
-    for action in actions:
-        action_type = action.get("action_type", "")
-        parameters = action.get("parameters", {})
+    # Execute the action(s) in the environment
+    for act in actions:
+        at = act.get("action_type", "")
+        params = act.get("parameters", {})
+        if not isinstance(params, dict):
+            params = {}
 
         try:
             result = _request_with_retry(
                 "POST",
                 f"{SOC_ENV_URL}/step",
-                {"action_type": action_type, "parameters": parameters},
+                {"action_type": at, "parameters": params},
             )
         except Exception:
-            # Connection failed mid-episode — return what we have
-            return total_reward if total_reward != 0.0 else -0.1
-
-        step_reward = float(result.get("reward", 0.0))
-        total_reward += normalize_reward(step_reward)
-
-        if result.get("done", False):
-            # Add final score bonus (weighted)
-            final_score = result.get("info", {}).get("final_score", 0.0)
-            total_reward += final_score * 0.5
             break
 
-    return round(total_reward, 4)
+        step_reward = float(result.get("reward", 0.0))
+        reward += normalize_reward(step_reward)
+
+        if result.get("done", False):
+            final_score = result.get("info", {}).get("final_score", 0.0)
+            reward += final_score * 0.5
+            break
+
+    return round(reward, 4)
 
 
 def _parse_completion(completion: str) -> List[Dict[str, Any]]:
@@ -275,12 +339,25 @@ def _parse_completion(completion: str) -> List[Dict[str, Any]]:
     return actions
 
 
-def _extract_task_id(prompts: List[str], idx: int) -> str:
+def _extract_task_id(prompts: List, idx: int) -> str:
     """
     Extract the task_id from the prompt text, or cycle through tasks.
+    Handles both string prompts and chat message format (list of dicts).
     """
     if idx < len(prompts):
-        prompt = prompts[idx].lower()
+        prompt_raw = prompts[idx]
+        # Handle chat message format: [{role: ..., content: ...}, ...]
+        if isinstance(prompt_raw, list):
+            # Concatenate all message contents
+            prompt = " ".join(
+                msg.get("content", "") for msg in prompt_raw
+                if isinstance(msg, dict)
+            ).lower()
+        elif isinstance(prompt_raw, str):
+            prompt = prompt_raw.lower()
+        else:
+            prompt = str(prompt_raw).lower()
+
         for tid in TASK_IDS:
             if tid.replace("_", " ") in prompt or tid in prompt:
                 return tid
