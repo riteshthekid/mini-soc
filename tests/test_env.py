@@ -135,7 +135,11 @@ def test_grader1_perfect_score():
             "ALT-031": {"classification": "benign", "priority": "P3"},
             "ALT-032": {"classification": "benign", "priority": "P4"},
             "ALT-033": {"classification": "suspicious", "priority": "P2"},
-        }
+        },
+        "episode_alert_ids": [
+            "ALT-001", "ALT-002", "ALT-010", "ALT-011", "ALT-012",
+            "ALT-020", "ALT-030", "ALT-031", "ALT-032", "ALT-033",
+        ],
     }
     score = grader1.grade(state)
     assert score == 0.999

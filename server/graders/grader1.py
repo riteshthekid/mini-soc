@@ -26,6 +26,7 @@ def _normalize_classification(raw: str) -> str:
 
 # Ground truth for each alert in Task 1
 GROUND_TRUTH: Dict[str, Dict[str, str]] = {
+    # Original 10 alerts
     "ALT-001": {"classification": "critical",   "priority": "P1"},
     "ALT-002": {"classification": "critical",   "priority": "P1"},
     "ALT-010": {"classification": "suspicious", "priority": "P2"},
@@ -36,9 +37,20 @@ GROUND_TRUTH: Dict[str, Dict[str, str]] = {
     "ALT-031": {"classification": "benign",     "priority": "P3"},
     "ALT-032": {"classification": "benign",     "priority": "P4"},
     "ALT-033": {"classification": "suspicious", "priority": "P2"},
+    # C5: Extended alert pool (10 new)
+    "ALT-040": {"classification": "suspicious", "priority": "P2"},
+    "ALT-041": {"classification": "benign",     "priority": "P4"},
+    "ALT-042": {"classification": "critical",   "priority": "P1"},
+    "ALT-043": {"classification": "critical",   "priority": "P1"},
+    "ALT-044": {"classification": "critical",   "priority": "P1"},
+    "ALT-045": {"classification": "suspicious", "priority": "P2"},
+    "ALT-046": {"classification": "benign",     "priority": "P4"},
+    "ALT-047": {"classification": "critical",   "priority": "P1"},
+    "ALT-048": {"classification": "benign",     "priority": "P4"},
+    "ALT-049": {"classification": "critical",   "priority": "P1"},
 }
 
-TOTAL_ALERTS = len(GROUND_TRUTH)
+TOTAL_ALERTS_DEFAULT = 10   # Default episode size (sampled from pool)
 CLASSIFICATION_WEIGHT = 0.7  # 70% of score
 PRIORITY_WEIGHT = 0.3        # 30% of score
 
@@ -49,6 +61,7 @@ def grade(state: Dict[str, Any]) -> float:
 
     state must contain:
       agent_classifications: Dict[alert_id, {"classification": str, "priority": str}]
+      episode_alert_ids: List[str]  (optional — alerts shown this episode)
 
     Returns float in [0.0, 1.0].
     """
@@ -57,11 +70,20 @@ def grade(state: Dict[str, Any]) -> float:
     if not agent_classifications:
         return 0.001
 
+    # Use episode-specific alert list if available, otherwise fall back to all
+    episode_alert_ids = state.get("episode_alert_ids")
+    if episode_alert_ids:
+        episode_truth = {aid: GROUND_TRUTH[aid] for aid in episode_alert_ids if aid in GROUND_TRUTH}
+    else:
+        episode_truth = GROUND_TRUTH
+
+    total_in_episode = len(episode_truth) or TOTAL_ALERTS_DEFAULT
+
     classification_correct = 0
     priority_correct = 0
     total_attempted = 0
 
-    for alert_id, truth in GROUND_TRUTH.items():
+    for alert_id, truth in episode_truth.items():
         agent = agent_classifications.get(alert_id)
         if agent is None:
             continue
@@ -84,11 +106,11 @@ def grade(state: Dict[str, Any]) -> float:
     if total_attempted == 0:
         return 0.001
 
-    # Coverage penalty: penalize for not attempting all alerts
-    coverage = total_attempted / TOTAL_ALERTS
+    # Coverage penalty: penalize for not attempting all alerts in this episode
+    coverage = total_attempted / total_in_episode
 
-    classification_score = (classification_correct / TOTAL_ALERTS) * CLASSIFICATION_WEIGHT
-    priority_score = (priority_correct / TOTAL_ALERTS) * PRIORITY_WEIGHT
+    classification_score = (classification_correct / total_in_episode) * CLASSIFICATION_WEIGHT
+    priority_score = (priority_correct / total_in_episode) * PRIORITY_WEIGHT
     raw_score = (classification_score + priority_score) * coverage
 
     return round(min(max(raw_score, 0.001), 0.999), 4)

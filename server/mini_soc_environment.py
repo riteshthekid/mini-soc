@@ -169,8 +169,12 @@ class SocEnvironment:
         self._open_incidents = []
 
         if task_id == "alert_triage":
+            # C5: Sample 10 alerts from extended pool (20 total) for diversity
+            pool = list(TASK1_ALERT_QUEUE)
+            sample_size = min(10, len(pool))
+            sampled = random.sample(pool, sample_size)
             self._alert_queue = [Alert(**{k: v for k, v in a.items() if k != "ground_truth_classification" and k != "ground_truth_priority"})
-                                  for a in TASK1_ALERT_QUEUE]
+                                  for a in sampled]
             self._current_alert = self._alert_queue[0] if self._alert_queue else None
 
         elif task_id == "incident_investigation":
@@ -566,6 +570,8 @@ class SocEnvironment:
             "rewarded_sources": self._rewarded_sources,
             "steps_taken": self._step_count,
             "max_steps": TASK_CONFIG[self._task_id]["max_steps"],
+            # C5: Pass episode's alert IDs for grader1 scoring
+            "episode_alert_ids": [a.alert_id for a in self._alert_queue],
         }
 
     def _build_ground_truth(self) -> Dict[str, Any]:
