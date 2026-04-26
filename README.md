@@ -258,11 +258,14 @@ class Action(BaseModel):
 
 ```
 mini-soc/
+├── README.md                 # This file — motivation, tasks, results
+├── blog.md                   # Blog post with training narrative
+├── openenv.yaml              # OpenEnv environment manifest
+├── Dockerfile                # Production container (HF Space)
 ├── models.py                 # Pydantic data models (Action, Observation, etc.)
 ├── client.py                 # MiniSocEnv(EnvClient) — agent-facing client
 ├── inference.py              # LLM baseline evaluation
 ├── run_agent.py              # Multi-task agent runner
-├── Dockerfile                # Production container
 ├── server/
 │   ├── app.py                # FastAPI app (8 endpoints)
 │   ├── mini_soc_environment.py  # Core environment + adaptive difficulty
@@ -276,10 +279,13 @@ mini-soc/
 ├── train/
 │   ├── train_grpo.py         # GRPO training script (TRL + Unsloth)
 │   ├── reward_wrapper.py     # Multi-level reward function
-│   ├── train_colab.ipynb     # 5-cell Colab notebook
+│   ├── train_colab.ipynb     # 7-cell Colab notebook
 │   └── plot_rewards.py       # Training visualization
-└── tests/
-    └── test_env.py           # 54 comprehensive tests
+├── tests/
+│   └── test_env.py           # 54 comprehensive tests
+└── docs/
+    ├── API.md                # API reference + Mermaid diagrams
+    └── architecture.svg      # System architecture diagram
 ```
 
 ---
