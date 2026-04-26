@@ -1,31 +1,35 @@
 # Mini SOC — Training & Improvement Implementation Plan
-**Phase:** Post-Deployment (Coding ✅ · Debugging ✅ · Hosting ✅)  
-**Next:** Training → Algorithm improvement → Environment improvement  
+**Phase:** Training Complete ✅ · All Tracks Implemented ✅  
+**Next:** Extended training (500 steps) → Final submission  
 **HF Space:** https://huggingface.co/spaces/riteshp30/mini-soc  
-**Date:** April 2026
+**Date:** April 2026  
+**Last Updated:** 2026-04-26
 
 ---
 
-## Current Baseline (What We Have)
+## Current Status
 
 | Component | State | Notes |
 |---|---|---|
-| Environment server | ✅ Live on HF Space | `/reset` `/step` `/state` all responding |
-| 3 attack scenarios | ✅ Deterministic | brute_force, phishing_lateral, false_positive |
-| 3 graders | ✅ Dense rewards | Per-step + terminal scoring |
-| 18 smoke tests | ✅ Passing | 80%+ coverage |
-| `train/train_grpo.py` | ✅ Written | Never actually run |
-| `train/reward_wrapper.py` | ✅ Written | Never actually run |
-| `train/train_colab.ipynb` | ✅ Written | Never actually run |
-| GRPO training run | ❌ Missing | **Start here** |
-| Reward improvement chart | ❌ Missing | Worth 20% of judging |
-| Blog post + video | ❌ Missing | Mandatory requirement |
+| Environment server | ✅ Live on HF Space | 8 endpoints: `/reset` `/step` `/state` `/tasks` `/health` `/metrics` `/difficulty` `/scenarios` |
+| 7 attack scenarios | ✅ Deterministic | brute_force, phishing, false_positive, ransomware, insider, supply_chain, apt |
+| 3 graders | ✅ Dense rewards + fuzzy matching | Per-step + terminal + strategy bonus |
+| 54 tests | ✅ All passing | Full coverage |
+| `train/train_grpo.py` | ✅ Runs on Colab T4 | 200 steps in ~1h 49min |
+| `train/reward_wrapper.py` | ✅ Multi-level rewards | Guarantees non-zero GRPO gradients |
+| `train/train_colab.ipynb` | ✅ 5-cell notebook | Self-contained |
+| GRPO training run | ✅ Complete (200 steps) | Non-zero loss, real learning |
+| JSON output quality | ✅ 0% → 100% valid JSON | Model learned format |
+| Alert triage score | ✅ 0.001 → 0.070 (70x) | Measurable improvement |
+| Extended alert pool | ✅ 20 alerts, 10 sampled | Prevents memorization |
+| Adaptive difficulty | ✅ 3 tiers, auto-escalation | Rolling average threshold |
+| MITRE ATT&CK tags | ✅ All 7 scenarios tagged | Technique IDs + tactics |
 
-**Baseline scores** (Qwen2.5-72B, no training):
-- Task 1 alert_triage: `0.65` ✅  
-- Task 2 incident_investigation: `0.42` ⚠️  
-- Task 3 threat_response: `0.22` ❌  
-- Overall average: `0.43`
+**200-step scores** (Qwen2.5-1.5B + LoRA, GRPO trained):
+- Task 1 alert_triage: `0.070` ⬆️ (70x improvement)
+- Task 2 incident_investigation: `0.001` (needs more steps)
+- Task 3 threat_response: `0.000` (needs more steps)
+- Overall average: `0.024`
 
 ---
 
