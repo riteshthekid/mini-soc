@@ -187,9 +187,12 @@ def _score_evidence(state: Dict[str, Any], gt: Dict[str, Any]) -> float:
     """
     Partial credit for each key piece of evidence retrieved.
     Also rewards querying the right log sources.
+    Includes ordered strategy bonus (B6) — querying key sources
+    first (before irrelevant ones) gets extra credit.
     """
     queried_ids: Set[str] = set(state.get("agent_queried_log_ids", []))
-    queried_sources: Set[str] = set(state.get("agent_queried_sources", []))
+    queried_sources_ordered: list = state.get("agent_queried_sources", [])
+    queried_sources: Set[str] = set(queried_sources_ordered)
 
     key_ids = gt["key_evidence_log_ids"]
     key_sources = gt["key_log_sources"]
@@ -197,8 +200,16 @@ def _score_evidence(state: Dict[str, Any], gt: Dict[str, Any]) -> float:
     id_score = len(queried_ids & key_ids) / len(key_ids) if key_ids else 0.0
     source_score = len(queried_sources & key_sources) / len(key_sources) if key_sources else 0.0
 
-    # Strategy bonus for finding at least one relevant log source
-    strategy_bonus = 0.15 if (queried_sources & key_sources) else 0.0
+    # B6: Ordered strategy bonus — reward querying key sources FIRST
+    strategy_bonus = 0.0
+    if queried_sources_ordered and key_sources:
+        # Check if the first N queries (where N = len(key_sources)) hit key sources
+        first_queries = queried_sources_ordered[:max(len(key_sources), 2)]
+        relevant_first = [s for s in first_queries if s in key_sources]
+        if len(relevant_first) >= 2:
+            strategy_bonus = 0.15  # Queried 2+ key sources in first moves
+        elif len(relevant_first) >= 1:
+            strategy_bonus = 0.08  # At least 1 key source queried early
 
     # Penalize for querying too many irrelevant sources (thrashing)
     irrelevant = len(queried_sources - key_sources)
