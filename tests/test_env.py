@@ -698,7 +698,7 @@ def test_grader2_attack_type_alias_password_guessing():
 
 
 def test_grader3_block_ip_subnet_partial_credit():
-    """Grader3 gives partial credit for blocking IP in same /24 subnet."""
+    """Grader3 gives -0.05 penalty for blocking wrong IP (subnet logic reverted)."""
     state = {
         "scenario_id": "phishing_lateral_001",
         "agent_isolated_assets": ["WS-HR-03"],
@@ -711,4 +711,4 @@ def test_grader3_block_ip_subnet_partial_credit():
     reward = grader3.compute_step_reward(
         "block_ip", {"ip_address": "94.102.49.191"}, state
     )
-    assert reward > 0.0, f"Blocking IP in same /24 subnet should get positive reward, got {reward}"
+    assert reward == -0.05, f"Blocking wrong IP should get -0.05 penalty, got {reward}"

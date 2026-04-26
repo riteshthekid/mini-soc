@@ -519,8 +519,7 @@ def _format_prompt(task_id: str, obs_data: Dict[str, Any], step: int = 0) -> str
         incidents_summary = "\nOpen Incidents:\n" + "\n".join(inc_lines)
 
     prompt = (
-        f"[SYSTEM]\n{SYSTEM_PROMPT}\n\n"
-        f"[TASK]\nTask: {task_id} (difficulty: {difficulty})\n"
+        f"Task: {task_id} (difficulty: {difficulty})\n"
         f"Objective: {objective}\n"
         f"Step: {step}\n"
         f"{message}"
@@ -528,7 +527,7 @@ def _format_prompt(task_id: str, obs_data: Dict[str, Any], step: int = 0) -> str
         f"{assets_summary}"
         f"{logs_summary}"
         f"{incidents_summary}\n\n"
-        f"[RESPOND]\nIssue your next action as a JSON object:"
+        f"Respond with ONE JSON action:"
     )
     return prompt
 
@@ -550,8 +549,7 @@ def _static_prompt(task_id: str) -> str:
         ),
     }
     return (
-        f"[SYSTEM]\n{SYSTEM_PROMPT}\n\n"
-        f"[TASK]\nTask: {task_id}\n"
+        f"Task: {task_id}\n"
         f"Objective: {objectives.get(task_id, 'Complete the task.')}\n\n"
-        f"[RESPOND]\nIssue your next action as a JSON object:"
+        f"Respond with ONE JSON action:"
     )
