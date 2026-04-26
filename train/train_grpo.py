@@ -99,9 +99,13 @@ def run_training(
     from train.reward_wrapper import soc_reward_function, build_soc_dataset
 
     # -----------------------------------------------------------------------
-    # WandB setup
+    # Experiment Tracking setup
     # -----------------------------------------------------------------------
-    report_to = "none"
+    report_to = "tensorboard"  # HF default — always on
+    tb_log_dir = os.path.join(OUTPUT_DIR, "runs")
+    os.makedirs(tb_log_dir, exist_ok=True)
+    logger.info("TensorBoard logging to: %s", tb_log_dir)
+
     if use_wandb:
         try:
             import wandb
@@ -120,11 +124,11 @@ def run_training(
                     "temperature": temperature,
                 },
             )
-            report_to = "wandb"
+            report_to = ["tensorboard", "wandb"]  # Both active
             logger.info("WandB initialized: project=%s", WANDB_PROJECT)
         except Exception as e:
-            logger.warning("WandB init failed (%s), continuing without it.", e)
-            report_to = "none"
+            logger.warning("WandB init failed (%s), continuing with TensorBoard only.", e)
+            report_to = "tensorboard"
 
     # -----------------------------------------------------------------------
     # Model setup
@@ -192,6 +196,7 @@ def run_training(
 
     grpo_config = GRPOConfig(
         output_dir=OUTPUT_DIR,
+        run_name=f"mini-soc-grpo-{num_steps}steps",
         max_steps=num_steps,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
@@ -200,11 +205,15 @@ def run_training(
         max_completion_length=max_completion_length,
         temperature=temperature,
         logging_steps=logging_steps,
+        logging_dir=tb_log_dir,
         save_steps=save_steps,
         report_to=report_to,
         bf16=True,
         remove_unused_columns=False,
         log_level="info",
+        # HF Hub push (only when push_to_hub=True)
+        push_to_hub=push_to_hub,
+        hub_model_id="mini-soc-grpo" if push_to_hub else None,
     )
 
     # -----------------------------------------------------------------------
