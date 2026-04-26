@@ -20,9 +20,9 @@ tags:
 
 **🔗 Links:**
 - 🌐 **Live Environment:** [https://huggingface.co/spaces/riteshp30/mini-soc](https://huggingface.co/spaces/riteshp30/mini-soc)
-- 📓 **Training Notebook:** [train/train_colab.ipynb](./train/train_colab.ipynb) — run GRPO training on Colab T4
+- 📓 **Training Notebook (Colab):** [Open in Google Colab](https://colab.research.google.com/drive/1dszsl5Z50asbUKmtfdfjNqqPsmNFgeP5?usp=sharing)
 - 📊 **Training Results:** [See Results Section](#training-results--grpo)
-- 📝 **Blog Post:** _Coming soon on HuggingFace_
+- 📝 **Blog Post:** [The Alert Storm: How Mini SOC is Training AI to Think Like a Cyber Defender](./blog.md)
 
 Built on the [OpenEnv](https://github.com/pytorch/openenv) framework.
 
